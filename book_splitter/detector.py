@@ -28,7 +28,7 @@ from .scoring import score_block
 from . import toc as toc_mod
 from . import decision_engine as de
 from . import vocabulary as V
-from .signals import _ROMAN, _CHAPTER_KW, _PART_KW
+from .signals import _ROMAN, _CHAPTER_KW, _PART_KW, _NUMERIC
 
 @dataclass
 class Chapter:
@@ -110,6 +110,8 @@ def _is_raw_candidate(b, band):
         return True
     if _CHAPTER_KW.match(b.text) or _PART_KW.match(b.text) or _ROMAN.match(b.text):
         return True
+    if b.word_count <= 12 and _NUMERIC.match(b.text or ""):   # "N. Title" — any script
+        return True
     if b.word_count <= 12:
         m = V.match_division(b.text)
         if m and m["role"] in ("labeled", "ordinal_label"):
@@ -121,9 +123,38 @@ def _is_raw_candidate(b, band):
     return False
 
 
-def _merge_candidates(blocks, band):
-    """Group consecutive raw candidates (gap <= 2) into merged headings."""
+def _structural_candidate(b, page_starts, isolated):
+    """Language-agnostic fallback: a short, non-body line marked structurally
+    (opens a page/section, or is bold / centered / isolated).
+
+    Lets manually-formatted books in any script surface candidates for the
+    scorer to judge.  The fallback runs ONLY when the precise gate finds
+    fewer than 2 candidates, so English/styled/keyword books are never
+    affected.
+    """
+    if not b.is_paragraph or b.is_empty or b.word_count > 12:
+        return False
+    # Sentence-ending punctuation -> body text, not a heading
+    if b.text.endswith((".", "?", "!", "।", "॥")):   # Latin + Devanagari danda
+        return False
+    return (b.page_break_before
+            or b.index in page_starts
+            or b.bold
+            or b.alignment == "center"
+            or b.index in isolated)
+
+
+def _merge_candidates(blocks, band, page_starts=frozenset(), isolated=frozenset()):
+    """Group consecutive raw candidates (gap <= 2) into merged headings.
+
+    When the precise pass (_is_raw_candidate) finds fewer than 2 hits, falls
+    back to _structural_candidate so that non-Latin, manually-formatted books
+    can still surface headings via page-break / bold / centered / isolated
+    signals.
+    """
     raw = [b for b in blocks if _is_raw_candidate(b, band)]
+    if len(raw) < 2:        # nothing precise fired -- try structural signals
+        raw = [b for b in blocks if _structural_candidate(b, page_starts, isolated)]
     groups, cur, prev = [], [], None
     for b in raw:
         if prev is not None and b.index - prev <= 2:
@@ -145,31 +176,45 @@ def detect(doc: UnifiedDocument, level_filter="auto") -> ChapterPlan:
     section_at       = doc.section_break_at
     isolated         = doc.isolated
 
-    merged = _merge_candidates(blocks, band)
+    merged = _merge_candidates(blocks, band,
+                               page_break_after | section_at, isolated)
 
     # ---- L1: TOC intelligence -------------------------------------------
-    toc_indices = set()
-    toc_matched = []
-    region = toc_mod.detect_toc_region(blocks)
-    if region is not None:
-        entries = toc_mod.extract_entries(blocks, region)
-        cand_dicts = [{"start_index": m.index, "norm": m.normalized_title(),
-                       "text": m.text} for m in merged]
-        toc_matched = toc_mod.match_to_body(entries, blocks, region[1], cand_dicts)
+    # Prefer adapter-extracted, INDEX-BASED TOC (DOCX _Toc anchors): language-
+    # agnostic ground truth, no text matching needed. Fall back to the
+    # text-based region matcher when no such TOC exists (hand-typed TOCs,
+    # EPUBs, etc.).
+    pre_toc = [e for e in (doc.toc_entries or []) if "index" in e]
+    if pre_toc:
+        region = None
+        toc_matched = [{"start_index": e["index"], "title": e["title"] or "(untitled)",
+                        "level": e["level"], "ratio": 1.0}
+                       for e in sorted(pre_toc, key=lambda e: e["index"])]
         toc_indices = {m["start_index"] for m in toc_matched}
+        n_entries = len(toc_matched)
+        toc_authoritative = len(toc_matched) >= 2      # _Toc anchors are ground truth
+    else:
+        toc_indices = set()
+        toc_matched = []
+        region = toc_mod.detect_toc_region(blocks)
+        if region is not None:
+            entries = toc_mod.extract_entries(blocks, region)
+            cand_dicts = [{"start_index": m.index, "norm": m.normalized_title(),
+                           "text": m.text} for m in merged]
+            toc_matched = toc_mod.match_to_body(entries, blocks, region[1], cand_dicts)
+            toc_indices = {m["start_index"] for m in toc_matched}
+        n_entries = len(toc_mod.extract_entries(blocks, region)) if region else 0
+        toc_authoritative = bool(toc_matched) and len(toc_matched) >= max(5, 0.5 * n_entries)
 
+    # Context dict consumed by every signal function in signals.py.
+    # All five keys must be present; signals guard against None/empty themselves.
     ctx = {
-        "heading_band": band,
-        "toc_indices": toc_indices,
+        "toc_indices":      toc_indices,
+        "heading_band":     band,
         "page_break_after": page_break_after,
         "section_break_at": section_at,
-        "isolated": isolated,
+        "isolated":         isolated,
     }
-
-    n_entries = len(toc_mod.extract_entries(blocks, region)) if region else 0
-
-    # ---- L1 authority: trust the TOC when it matched well ----------------
-    toc_authoritative = bool(toc_matched) and len(toc_matched) >= max(5, 0.5 * n_entries)
 
     # ---- build candidates for the Decision Engine ------------------------
     cand_list = []

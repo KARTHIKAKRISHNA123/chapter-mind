@@ -6,7 +6,7 @@ Output = existing clone_with_blocks, behind the OutputWriter interface.
 NO detection logic lives here.
 
 Guarantee: _DocxWriter.write() produces byte-identical output to the old
-splitter.split() — it slices the same block_children() list by index and
+splitter.split() -- it slices the same block_children() list by index and
 hands the same lxml elements to the same clone_with_blocks().
 """
 from __future__ import annotations
@@ -16,6 +16,7 @@ import re
 from lxml import etree
 
 from .base import DocumentAdapter, OutputWriter
+from .docx_toc import extract_toc
 from ..models import Block, DocumentMeta, UnifiedDocument
 from ..docx_package import DocxPackage
 from ..naming import render_filename
@@ -82,12 +83,16 @@ def _docx_block(index: int, el, resolver: StyleResolver) -> Block:
             run_bold = True
         if rpr.find(W + "caps") is not None:
             b.all_caps_prop = True
-        sz = rpr.find(W + "sz")
-        if sz is not None:
-            try:
-                sizes.append(int(sz.get(W + "val")) // 2)  # half-points -> pt
-            except (TypeError, ValueError):
-                pass
+        # Latin size (<w:sz>) AND complex-script size (<w:szCs>). Indic scripts
+        # are "complex scripts": Word stores their size in szCs, often with sz
+        # absent -- reading only sz made every Indic heading report no size.
+        for tag in (W + "sz", W + "szCs"):
+            s = rpr.find(tag)
+            if s is not None:
+                try:
+                    sizes.append(int(s.get(W + "val")) // 2)  # half-points -> pt
+                except (TypeError, ValueError):
+                    pass
     b.max_size = max(sizes) if sizes else None
     # Bold is true if any run is bold OR the paragraph style implies bold.
     style_bold = bool(b.style_id and resolver.by_id.get(b.style_id, {}).get("bold"))
@@ -155,9 +160,16 @@ class _DocxWriter(OutputWriter):
         Filenames follow `pattern` when given; otherwise the original
         `NN_slug.docx` naming is kept unchanged (preserves byte-fidelity tests).
         """
+        return list(self.iter_write(plan, out_dir, pattern))
+
+    def iter_write(self, plan, out_dir: str, pattern: str | None = None):
+        """Yield one manifest entry per chapter; holds <=1 chapter in memory.
+
+        Suitable for a live progress bar or streaming pipeline: the caller can
+        consume results as they arrive rather than waiting for the full write.
+        """
         os.makedirs(out_dir, exist_ok=True)
         children = self._pkg.block_children()   # list of lxml elements, same order as blocks
-        manifest = []
         for i, ch in enumerate(plan.chapters):
             els = children[ch.start:ch.end]
             if not els:
@@ -168,14 +180,13 @@ class _DocxWriter(OutputWriter):
             else:
                 name = f"{i:02d}_{_slug(ch.title, f'chapter_{i}')}.docx"
             self._pkg.write(os.path.join(out_dir, name), data)
-            manifest.append({
+            yield {
                 "file": name,
                 "title": ch.title,
                 "level": ch.level,
                 "confidence": ch.confidence,
                 "blocks": [ch.start, ch.end],
-            })
-        return manifest
+            }
 
 
 # ---------------------------------------------------------------------------
@@ -197,7 +208,7 @@ class DocxAdapter(DocumentAdapter):
             page_break_after=pba,
             section_break_at=sect,
             isolated=iso,
-            toc_entries=None,           # engine will scan body blocks
+            toc_entries=extract_toc(children),  # anchor-based; None for hand-typed TOCs
         )
 
     def make_writer(self) -> OutputWriter:

@@ -64,3 +64,8 @@ strict = false
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+addopts = "-v --tb=short"
+markers = [
+    "regression: marks tests as regression tests (deselect with '-m \"not regression\"')",
+    "performance: bounded-memory / timing tests",
+]

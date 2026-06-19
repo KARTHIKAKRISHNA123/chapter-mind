@@ -118,7 +118,7 @@ class TestChapterPlan:
         assert ch.start == 0
         assert ch.end == 10
         assert ch.confidence == 0.95
-        assert ch.level == "chapter" # Default value
+        assert ch.level == "chapter"  # Default value
 
     def test_chapter_plan_abstained(self):
         plan = ChapterPlan(chapters=[], abstained=True, reason="too few candidates")
@@ -129,7 +129,6 @@ class TestChapterPlan:
         ch1 = Chapter(title="Intro", start=0, end=5)
         ch2 = Chapter(title="Chapter 1", start=5, end=15)
         plan = ChapterPlan(chapters=[ch1, ch2], abstained=False)
-        
         assert plan.abstained is False
         assert len(plan.chapters) == 2
         assert plan.chapters[1].title == "Chapter 1"

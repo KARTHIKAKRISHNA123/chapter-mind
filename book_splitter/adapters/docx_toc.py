@@ -44,3 +44,29 @@ def toc_region(body) -> dict[str, dict]:
                 region[a] = {"title": _para_text(el), "level": max(level, 0)}
                 break
     return region
+
+
+def extract_toc(children) -> list[dict] | None:
+    """Return [{index, title, level}] for body headings carrying _Toc bookmarks,
+    in body order — or None if the document has no Word-generated TOC.
+
+    `children` must be the same list the adapter enumerates for Block.index
+    (DocxPackage.block_children()), so indices line up exactly.
+
+    Matching by ANCHOR (not text) is language-agnostic: works identically for
+    English, Tamil, Hindi, Assamese, Bhojpuri, CJK — the script never appears
+    in a bookmark id.
+    """
+    region = toc_region(children)
+    entries: list[dict] = []
+    for i, el in enumerate(children):
+        anchor = toc_anchor(el)
+        if anchor is None:
+            continue
+        meta = region.get(anchor, {})
+        entries.append({
+            "index": i,
+            "title": meta.get("title") or _para_text(el),
+            "level": meta.get("level", 0),
+        })
+    return entries or None

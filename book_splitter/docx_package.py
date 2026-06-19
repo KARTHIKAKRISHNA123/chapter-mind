@@ -70,6 +70,16 @@ class DocxPackage:
         if self._body is None:
             raise ValueError("Malformed DOCX: <w:body> not found in document.xml")
 
+        # Empty-body skeleton built ONCE: clone_with_blocks copies this (tiny)
+        # per chapter instead of the whole document. Output stays byte-identical.
+        self._skeleton = copy.deepcopy(self._doc_tree)
+        skel_body = self._skeleton.find(W + "body")
+        kids = list(skel_body)
+        keep_sect = kids[-1] if (kids and kids[-1].tag == W + "sectPr") else None
+        for child in kids:
+            if child is not keep_sect:
+                skel_body.remove(child)
+
     # ---- read-only structural access -------------------------------------
 
     @property
@@ -107,32 +117,25 @@ class DocxPackage:
         """Return .docx bytes identical to the original EXCEPT that <w:body>
         contains only `blocks` (deep-copied) followed by the preserved final
         <w:sectPr>. All other parts are byte-for-byte identical."""
-        # 1. Deep-copy the whole document tree so we never mutate the original.
-        doc = copy.deepcopy(self._doc_tree)
+        # 1. Clone the empty-body skeleton (tiny vs deep-copying the full doc).
+        #    Skeleton already contains only the trailing sectPr, so page size,
+        #    margins, and header/footer references are preserved automatically.
+        doc = copy.deepcopy(self._skeleton)
         body = doc.find(W + "body")
 
-        # 2. Capture and detach the original trailing sectPr (page settings).
-        sectpr = None
+        # 2. Insert chapter blocks before the preserved sectPr.
         kids = list(body)
-        if kids and kids[-1].tag == W + "sectPr":
-            sectpr = copy.deepcopy(kids[-1])
-
-        # 3. Empty the body, then re-insert exactly the chapter's blocks.
-        for child in list(body):
-            body.remove(child)
+        sect = kids[-1] if (kids and kids[-1].tag == W + "sectPr") else None
+        pos = body.index(sect) if sect is not None else len(body)
         for blk in blocks:
-            body.append(copy.deepcopy(blk))
-
-        # 4. Re-append page settings so the chapter renders with correct page
-        #    size, margins, and header/footer references.
-        if sectpr is not None:
-            body.append(sectpr)
+            body.insert(pos, copy.deepcopy(blk))
+            pos += 1
 
         new_document_xml = _XML_DECL + etree.tostring(
             doc, xml_declaration=False, encoding="UTF-8"
         )
 
-        # 5. Re-zip: every member kept verbatim, only document.xml substituted.
+        # 3. Re-zip: every member kept verbatim, only document.xml substituted.
         import io
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
