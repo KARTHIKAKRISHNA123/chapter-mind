@@ -1,0 +1,29 @@
+name: Release
+
+# Tag-gated, OIDC trusted-publishing release. No PyPI token is stored anywhere.
+# Cut a release by pushing an annotated tag:  git tag v0.9.0 && git push --tags
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write          # required for PyPI trusted publishing (OIDC)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install (with all extras + dev)
+        run: pip install -e ".[all,dev]"
+      - name: Re-verify on the exact tag
+        run: pytest -m "not performance"
+      - name: Build sdist + wheel
+        run: |
+          pip install build
+          python -m build
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
