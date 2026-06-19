@@ -1,0 +1,46 @@
+# ==========================================
+# Version Control Exclusion List
+# ==========================================
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual Environments
+venv/
+env/
+
+# Tooling Caches & Testing
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDEs & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Project Specific: universal-book-splitter
+# Block all outputs and reports
+chapters_out/
+chapters_dir/
+report.json
+
+# Block stray generated formats but KEEP the golden corpus
+*.docx
+*.epub
+!tests/golden_books/*.docx
+!tests/golden_books/*.epub

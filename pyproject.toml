@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "universal-book-splitter"
 version = "2.0.0"
-description = "Deterministic, format-agnostic book → chapter splitter (DOCX, EPUB)"
+description = "Deterministic, format-agnostic book -> chapter splitter (DOCX, EPUB)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -22,59 +22,45 @@ classifiers = [
     "Topic :: Text Processing :: Markup",
     "Topic :: Office/Business",
 ]
+dependencies = [
+    "lxml>=4.9",
+    "ebooklib>=0.18",
+    "beautifulsoup4>=4.12",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+    "mypy>=1.8",
+    "ruff>=0.3",
+    "types-beautifulsoup4",
+]
 
 [project.urls]
 Homepage = "https://github.com/KarthikaKrishna123/universal-book-splitter"
 Repository = "https://github.com/KarthikaKrishna123/universal-book-splitter"
 Issues = "https://github.com/KarthikaKrishna123/universal-book-splitter/issues"
 
-dependencies = [
-    "lxml>=4.9",
-    "pydantic>=2.0",
-    "structlog>=23.1",
-    "typer>=0.9",
-    "rich>=13.0",
-]
-
-[project.optional-dependencies]
-epub = [
-    "ebooklib>=0.18",
-    "beautifulsoup4>=4.12",
-]
-dev = [
-    "pytest>=7.4",
-    "pytest-cov>=4.1",
-    "ruff>=0.3",
-    "mypy>=1.8",
-    "lxml-stubs",
-]
-# Single source of truth: `all` re-exports the optional format deps so they are
-# never listed twice. `pip install universal-book-splitter[all]` -> everything.
-all = ["universal-book-splitter[epub]"]
-
 [project.scripts]
 book-splitter = "book_splitter.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["."]
+packages = ["book_splitter"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py310"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP"]
+select = ["E", "F", "W", "I"]
 ignore = ["E501"]
 
 [tool.mypy]
 python_version = "3.10"
-strict = false
 ignore_missing_imports = true
+strict = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-v --tb=short"
-markers = [
-    "regression: golden-output / chapter-count stability tests",
-    "performance: bounded-memory / timing tests",
-]
+pythonpath = ["."]
