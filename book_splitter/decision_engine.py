@@ -37,6 +37,7 @@ from statistics import median
 
 from . import structure as structure_mod
 from . import vocabulary as V
+from .scoring import confidence_band
 
 # ---- DERIVED guards (structural limits), NOT score thresholds ---------------
 SEP_FLOOR = 0.08          # min relative dominance of the largest gap to trust it
@@ -280,10 +281,84 @@ def _explain(c, thr, toc_auth):
         "title": c.title, "index": c.index, "level": c.level,
         "div_type": c.div_type, "depth": c.depth, "number": c.number,
         "confidence": c.confidence,
+        "band": confidence_band(c.confidence),
         "accepted_by": ("toc_authority" if toc_auth
                         else f"score>={thr.accept} via {thr.method}"),
         "fired_signals": c.fired,
     }
+
+
+# ----------------------------------------------------------------------------
+# 2b. Numbering-noise prune (Bhojpuri nested-list fix)
+# ----------------------------------------------------------------------------
+def _longest_increasing(items, key):
+    """O(n²) longest strictly-increasing-by-`key` subsequence.
+    n = number of candidates -- always tiny. Returns items in original order."""
+    n = len(items)
+    if n == 0:
+        return []
+    length = [1] * n
+    prev = [-1] * n
+    for i in range(n):
+        for j in range(i):
+            if key(items[j]) < key(items[i]) and length[j] + 1 > length[i]:
+                length[i] = length[j] + 1
+                prev[i] = j
+    end = max(range(n), key=lambda i: length[i])
+    out = []
+    while end != -1:
+        out.append(items[end])
+        end = prev[end]
+    return out[::-1]
+
+
+def _prune_numbering_noise(cands, diag):
+    """Flat numbered books only: collapse a nested numbered list that injected
+    false chapter candidates.
+
+    Strategy:
+      * Per number value keep the *strongest* candidate (real chapters carry
+        page-break / style evidence and thus have higher confidence; list items
+        are bare-numbered and score lower).
+      * Then keep the longest strictly-increasing-by-number subsequence of those
+        survivors.
+
+    Skips multi-level books where Chapter 1 legitimately resets under a new
+    Part/Book/Act (different _rank). No-op on a clean sequence, so correctly
+    detected books are untouched."""
+    numbered = [c for c in cands if c.number is not None and not c.is_matter]
+    if len(numbered) < 3:
+        return cands
+
+    # Multi-level: numbering resets under a container are legitimate
+    if len({c._rank for c in numbered}) > 1:
+        return cands
+
+    seq = [c.number for c in sorted(numbered, key=lambda c: c.index)]
+    if all(seq[i] > seq[i - 1] for i in range(1, len(seq))):
+        return cands                                # already a clean sequence
+
+    # Keep the strongest candidate per number value
+    best: dict = {}
+    for c in numbered:
+        if c.number not in best or c.confidence > best[c.number].confidence:
+            best[c.number] = c
+    survivors = sorted(best.values(), key=lambda c: c.index)
+
+    kept = _longest_increasing(survivors, key=lambda c: c.number)
+    if len(kept) < 2:
+        # Would over-prune; leave it for the abstention framework
+        return cands
+
+    kept_idx = {c.index for c in kept}
+    dropped = [c.title for c in numbered if c.index not in kept_idx]
+    if dropped:
+        diag["numbering_noise_dropped"] = dropped
+
+    # Keep: surviving numbered chapters + all un-numbered + all matter blocks
+    keep = kept_idx | {c.index for c in cands
+                       if c.number is None or c.is_matter}
+    return [c for c in cands if c.index in keep]
 
 
 # ----------------------------------------------------------------------------
@@ -327,6 +402,7 @@ def decide(candidates, context) -> Decision:
     # boundary validation
     gated = _validate_duplicates(gated, diag)
     gated = _validate_min_distance(gated, diag)
+    gated = _prune_numbering_noise(gated, diag)    # collapse nested-list noise
     hier_viol = _validate_hierarchy(gated)
     num_viol = _validate_numbering(gated)
     scene_viol = _validate_act_scene(gated)

@@ -29,6 +29,7 @@ from .detector import detect
 from .ingestion import IngestionError
 from .safety import UnsafeArchiveError
 from .review import triage
+from .scoring import confidence_band
 
 
 def _build_parser():
@@ -93,9 +94,10 @@ def process_one(path, args, log) -> dict:
           f"candidates={plan.diagnostics.get('merged_candidates')}")
     if plan.abstained:
         print(f"ABSTAINED: {plan.reason}")
-    print(f"{'#':>2}  {'level':7} {'conf':>5}  title")
+    print(f"{'#':>2}  {'level':7} {'conf':>5}  {'band':9}  title")
     for i, ch in enumerate(plan.chapters):
-        print(f"{i:>2}  {ch.level:7} {ch.confidence:>5.2f}  {ch.title[:60]}")
+        print(f"{i:>2}  {ch.level:7} {ch.confidence:>5.2f}  "
+              f"{confidence_band(ch.confidence):9}  {ch.title[:50]}")
 
     manifest = []
     skipped = None
