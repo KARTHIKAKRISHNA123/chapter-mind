@@ -1,8 +1,11 @@
 """
 Golden regression harness — the safety net for all hardening work.
 
-Data-driven: adding a book = drop two files into ``tests/golden_books/``:
+Data-driven: adding a book = drop two files into either:
+  - ``tests/golden_books/``  (flat)
+  - ``tests/golden/<language>/``  (language-organised)
 
+File pair per book:
     <name>.<format>            the book itself (docx / epub)
     <name>.expected.json       {"format","chapter_count","abstained","titles"}
 
@@ -22,15 +25,28 @@ import pytest
 from book_splitter.adapters.registry import get_adapter
 from book_splitter.detector import detect
 
-GOLDEN = Path(__file__).parents[1] / "golden_books"
+GOLDEN_BOOKS = Path(__file__).parents[1] / "golden_books"
+GOLDEN_LANG  = Path(__file__).parents[1] / "golden"
 
 
 def _cases():
-    for spec in sorted(GOLDEN.glob("*.expected.json")):
+    # flat legacy directory
+    for spec in sorted(GOLDEN_BOOKS.glob("*.expected.json")):
         meta = json.loads(spec.read_text(encoding="utf-8"))
         stem = spec.name[: -len(".expected.json")]
         book = spec.with_name(f"{stem}.{meta['format']}")
-        yield pytest.param(book, meta, id=book.name)
+        yield pytest.param(book, meta, id=f"legacy/{book.name}")
+
+    # language-organised subdirectories: tests/golden/<lang>/<name>.expected.json
+    if GOLDEN_LANG.is_dir():
+        for lang_dir in sorted(GOLDEN_LANG.iterdir()):
+            if not lang_dir.is_dir():
+                continue
+            for spec in sorted(lang_dir.glob("*.expected.json")):
+                meta = json.loads(spec.read_text(encoding="utf-8"))
+                stem = spec.name[: -len(".expected.json")]
+                book = spec.with_name(f"{stem}.{meta['format']}")
+                yield pytest.param(book, meta, id=f"{lang_dir.name}/{book.name}")
 
 
 _CASES = list(_cases())

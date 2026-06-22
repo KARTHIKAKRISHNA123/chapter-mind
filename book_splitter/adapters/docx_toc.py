@@ -3,7 +3,6 @@
 A heading carries <w:bookmarkStart w:name="_Toc..."/>; the TOC entry
 hyperlinks to it with w:anchor="_Toc...". Match by anchor, never by text."""
 from __future__ import annotations
-from lxml import etree
 
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 def q(t): return f"{{{W}}}{t}"

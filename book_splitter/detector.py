@@ -18,7 +18,6 @@ Output: a ChapterPlan = ordered list of Chapter(title, start, end, confidence).
 """
 
 from __future__ import annotations
-import re
 from collections import Counter
 from dataclasses import dataclass, field
 

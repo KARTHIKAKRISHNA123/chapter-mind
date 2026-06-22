@@ -130,6 +130,19 @@ def compute_adaptive_thresholds(scores) -> Thresholds:
         rationale = (f"no dominant gap (separation {separation:.2f} < {SEP_FLOOR}); "
                      f"conservative cut at Q3={q3:.3f}")
 
+    # ---- uniform-quality cluster guard ----------------------------------
+    # If the threshold would only pass 1 candidate (gap is at the very top)
+    # but the lowest-scoring candidate still reaches medium confidence (>=0.4),
+    # all candidates are a tight same-quality cluster: keep every one of them.
+    # This prevents "Chapter I" books from abstaining when all 12 roman-numeral
+    # chapters score ~0.93 and the tiny inter-score gap looks dominant.
+    n_pass = sum(1 for sc in s if sc >= accept)
+    if n_pass < 2 and s[-1] >= 0.40:
+        accept = s[-1] - 0.001
+        method = method + "+uniform_cluster"
+        rationale += (f"; only {n_pass} would pass — uniform-quality cluster "
+                      f"(min={s[-1]:.3f}>=0.40); kept all {n}")
+
     below = [(g, i) for g, i in gaps if s[i + 1] < accept]
     if below:
         gb, kb = max(below, key=lambda x: (x[0], -x[1]))
