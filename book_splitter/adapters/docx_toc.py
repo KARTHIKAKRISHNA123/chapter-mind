@@ -1,11 +1,28 @@
 # book_splitter/adapters/docx_toc.py
 """Language-agnostic TOC detection via Word's _Toc bookmark anchors.
 A heading carries <w:bookmarkStart w:name="_Toc..."/>; the TOC entry
-hyperlinks to it with w:anchor="_Toc...". Match by anchor, never by text."""
+hyperlinks to it with w:anchor="_Toc...". Match by anchor, never by text.
+
+Fallback (pandoc / converted DOCX): a TOC *field* with a cached result but NO
+_Toc bookmarks. `resolve_field_toc` resolves those cached entry titles to body
+heading indices by monotonic title match — see its docstring."""
 from __future__ import annotations
+import re
+from difflib import SequenceMatcher
 
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 def q(t): return f"{{{W}}}{t}"
+
+_PAGENUM_SUFFIX = re.compile(r"[\s\.\u2026]+\d{1,4}\s*$")   # "..... 42"
+_CONTENTS_RE = re.compile(
+    r"^\s*(table of contents|contents|table des mati|sommaire|"
+    r"inhaltsverzeichnis|inhalt)\b", re.I)
+
+
+def _norm_toc(s: str) -> str:
+    s = _PAGENUM_SUFFIX.sub("", s or "")
+    s = re.sub(r"[^\w\s]", " ", s.lower())   # drop punctuation, keep any script
+    return " ".join(s.split())
 
 
 def toc_anchor(el) -> str | None:
@@ -69,3 +86,57 @@ def extract_toc(children) -> list[dict] | None:
             "level": meta.get("level", 0),
         })
     return entries or None
+
+
+def resolve_field_toc(field_titles, heading_pool):
+    """Resolve a Word TOC *field* cached result to body heading indices.
+
+    Pandoc and many DOCX converters emit a TOC field whose cached rendering
+    lists the chapter titles, but DON'T write the `_Toc` bookmark anchors that
+    `extract_toc` relies on. This recovers an authoritative, index-based TOC by
+    matching each cached entry title to a body heading.
+
+    Parameters
+    ----------
+    field_titles : ordered visible titles from the TOC field's cached result.
+    heading_pool : ordered ``[(block_index, title_text, style_level)]`` for
+                   every styled body heading (any heading level; the value is
+                   not assumed to be 0 — pandoc's off-by-one outline levels are
+                   tolerated).
+
+    Resolution is MONOTONIC: each entry matches the first heading at or after
+    the previous match, so repeated titles (e.g. a book title appearing on the
+    title page AND as a chapter) disambiguate by order. Language-agnostic — the
+    match is on normalized title text in whatever script. Returns
+    ``[{index, title, level}]`` or None if fewer than two entries resolve.
+    """
+    pool = [(i, _norm_toc(t), lvl) for (i, t, lvl) in heading_pool
+            if t and not _CONTENTS_RE.match(t)]
+    if not pool:
+        return None
+    min_lvl = min(lvl for _, _, lvl in pool)
+
+    entries, cursor = [], 0
+    for raw in field_titles:
+        title = _PAGENUM_SUFFIX.sub("", raw or "").strip()
+        if not title or _CONTENTS_RE.match(title):
+            continue
+        norm = _norm_toc(title)
+        if not norm:
+            continue
+        chosen = None
+        for j in range(cursor, len(pool)):
+            idx, hnorm, lvl = pool[j]
+            if not hnorm:
+                continue
+            if (hnorm == norm or hnorm.startswith(norm) or norm.startswith(hnorm)
+                    or SequenceMatcher(None, norm, hnorm).ratio() >= 0.9):
+                chosen = (j, idx, lvl)
+                break
+        if chosen:
+            j, idx, lvl = chosen
+            entries.append({"index": idx, "title": title,
+                            "level": 0 if lvl <= min_lvl else 1})
+            cursor = j + 1
+
+    return entries if len(entries) >= 2 else None

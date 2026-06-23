@@ -1,0 +1,13 @@
+{
+  "format": "epub",
+  "source": "Synthetic single-file EPUB (anchor-delimited chapters) — F1 regression",
+  "abstained": false,
+  "chapter_count": 4,
+  "titles": [
+    "Front Matter",
+    "Chapter 1. The Beginning",
+    "Chapter 2. The Middle",
+    "Chapter 3. The End"
+  ],
+  "note": "Single XHTML doc; chapters resolved purely via nav href anchors (content.xhtml#chN -> block index). Proves F1 anchor resolution."
+}

@@ -53,6 +53,14 @@ class Block:
     # positional / layout
     page_break_before: bool = False
 
+    # list numbering: (numId, ilvl) from w:numPr; None if not list-numbered
+    num: tuple | None = None
+
+    # EPUB anchor: this element's own HTML id attribute, used by the EPUB
+    # adapter to resolve nav/NCX hrefs (e.g. "chap1.xhtml#c1") to a block index.
+    # None for DOCX and for EPUB elements without an id.
+    anchor_id: str | None = None
+
     # ---- convenience predicates used by signals --------------------------
 
     @property
@@ -82,6 +90,10 @@ class UnifiedDocument:
     page_break_after: set = field(default_factory=set)   # indices where a page starts
     section_break_at: set = field(default_factory=set)   # oddPage/evenPage section starts
     isolated: set = field(default_factory=set)           # short lines flanked by blanks
+
+    # First block index of each EPUB spine document (a structural boundary cue,
+    # analogous to page_break_after for DOCX). Empty for DOCX.
+    spine_starts: set = field(default_factory=set)
 
     # TOC entries pre-extracted from the source (EPUB nav/NCX).
     # None means "no pre-extracted TOC; engine will scan body blocks".

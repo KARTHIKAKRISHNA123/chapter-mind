@@ -1,0 +1,16 @@
+{
+  "format": "docx",
+  "source": "Jat-Pat Todak Mandal address translated to Bhojpuri — public domain",
+  "notes": "Nested numbered list (items 1-5) inside chapter 3; two date lines (12 Sep 2000, 5 Nov 1953). Fixes: wc<=15 gate, _HINDI_DATE exclusion, vocabulary bare-number for Indic, _prune_numbering_noise.",
+  "abstained": false,
+  "chapter_count": 7,
+  "titles": [
+    "Front Matter",
+    "1. जाती खतम होखे के चाहीं—काहें?",
+    "2. बेस्याबृति जाती के नींव ह",
+    "3. जात परथा",
+    "4. भगवान आ सास्त्र जात के अधार ह",
+    "5. छुआछूत खतम करे के तरीका",
+    "6. संबिधान सभा के जाती के खतम करे प दिहल पेरियार के सलाह"
+  ]
+}

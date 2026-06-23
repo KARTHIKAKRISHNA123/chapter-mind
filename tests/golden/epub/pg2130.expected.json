@@ -1,7 +1,22 @@
 {
   "format": "epub",
-  "source": "Project Gutenberg EPUB (pg2130) — flat/unstructured navigation",
-  "abstained": true,
-  "chapter_count": 1,
-  "note": "This EPUB has no chapter nav points; abstention is the correct safe output."
+  "source": "Project Gutenberg EPUB (pg2130) — multi-file nav + spine",
+  "abstained": false,
+  "chapter_count": 13,
+  "titles": [
+    "Front Matter",
+    "Utopia",
+    "Contents",
+    "DISCOURSES OF RAPHAEL HYTHLODAY, OF THE BEST STATE OF A COMMONWEALTH",
+    "OF THEIR TOWNS, PARTICULARLY OF AMAUROT",
+    "OF THEIR MAGISTRATES",
+    "OF THEIR TRADES, AND MANNER OF LIFE",
+    "OF THEIR TRAFFIC",
+    "OF THE TRAVELLING OF THE UTOPIANS",
+    "OF THEIR SLAVES, AND OF THEIR MARRIAGES",
+    "OF THEIR MILITARY DISCIPLINE",
+    "OF THE RELIGIONS OF THE UTOPIANS",
+    "THE FULL PROJECT GUTENBERG™ LICENSE"
+  ],
+  "note": "Multi-file Project Gutenberg EPUB: nav hrefs resolve to block indices (F1/F2), spine starts seed candidates (F3), and chapter-wrapper divs are descended (F4). Authoritative TOC drives the split."
 }

@@ -26,6 +26,7 @@ from __future__ import annotations
 import os
 import re
 import uuid
+from urllib.parse import unquote
 
 from .base import DocumentAdapter, OutputWriter
 from .epub_resources import collect_assets
@@ -42,6 +43,33 @@ _PARA_TAGS = frozenset({
     "li", "dt", "dd", "blockquote", "pre",
 })
 _TABLE_TAGS = frozenset({"table"})
+
+# F4: structural wrappers that GROUP block content rather than being content.
+# We descend into these so a chapter wrapped in <div class="chapter"> exposes
+# its heading/paragraphs as individual blocks instead of one giant block.
+_CONTAINER_TAGS = frozenset({"div", "section", "article", "main"})
+
+
+def _has_block_children(el) -> bool:
+    """True if `el` directly contains block-level or further container children
+    (so it is a wrapper to descend), vs. a leaf block whose text we keep whole."""
+    return any(
+        (c.name in _PARA_TAGS or c.name in _TABLE_TAGS or c.name in _CONTAINER_TAGS)
+        for c in el.find_all(True, recursive=False)
+    )
+
+
+def _iter_block_elements(node):
+    """Yield body block elements in reading order, descending into structural
+    wrapper containers (F4) but never into paragraph/heading/table elements.
+
+    A container with no block-level children (e.g. a <div> of inline text) is
+    itself emitted as one block, so no text is ever dropped."""
+    for c in node.find_all(True, recursive=False):
+        if c.name in _CONTAINER_TAGS and _has_block_children(c):
+            yield from _iter_block_elements(c)
+        else:
+            yield c
 
 
 # ---------------------------------------------------------------------------
@@ -65,7 +93,24 @@ def _epub_block(index: int, el, item_id: str) -> Block:
         word_count=len(text.split()),
         style_level=_HEADING_LEVEL.get(tag),
         bold=bool(el.find(["b", "strong"])),
+        anchor_id=el.get("id") or None,   # F1: own HTML id for nav resolution
     )
+
+
+def _element_ids(el) -> list[str]:
+    """All anchor ids reachable from this block element: its own ``id`` plus any
+    descendant ``id`` and legacy ``<a name=...>`` anchors. Lets nav hrefs that
+    target an element *inside* a block (common when a chapter is wrapped in a
+    div) still resolve to this block's index."""
+    ids: list[str] = []
+    own = el.get("id")
+    if own:
+        ids.append(own)
+    for d in el.find_all(attrs={"id": True}):
+        ids.append(d["id"])
+    for a in el.find_all("a", attrs={"name": True}):
+        ids.append(a["name"])
+    return ids
 
 
 def _compute_isolated(blocks: list[Block]) -> set:
@@ -110,6 +155,55 @@ def _extract_toc(book) -> list[dict] | None:
 
     entries = _walk(book.toc, 0)
     return entries if entries else None
+
+
+def _resolve_toc(book, item_first_index, anchor_index, name_to_id):
+    """F2 -- turn raw nav/NCX entries ({title, level, href}) into engine-ready
+    entries ({title, level, index}) by resolving each ``href`` to a block index.
+
+    Resolution order per entry:
+      1. ``file#anchor`` -> exact block carrying that id  (anchor_index)
+      2. ``file``        -> first block of that spine document (item_first_index)
+      3. unresolvable    -> dropped (engine falls back to body scanning)
+
+    Returns a de-duplicated, index-sorted list, or None when fewer than two
+    entries resolve (not enough to be authoritative)."""
+    raw = _extract_toc(book)
+    if not raw:
+        return None
+
+    def _item_for(file_part: str):
+        if not file_part:
+            return None
+        f = unquote(file_part)
+        return (name_to_id.get(f)
+                or name_to_id.get(f.rsplit("/", 1)[-1]))   # basename fallback
+
+    resolved = []
+    for e in raw:
+        file_part, _, anchor = (e.get("href") or "").partition("#")
+        item_id = _item_for(file_part)
+        if item_id is None:
+            continue
+        idx = None
+        if anchor:
+            idx = anchor_index.get((item_id, unquote(anchor)))
+        if idx is None:
+            idx = item_first_index.get(item_id)
+        if idx is None:
+            continue
+        resolved.append({"title": e.get("title", "") or "",
+                         "level": e.get("level", 0), "index": idx})
+
+    if len(resolved) < 2:
+        return None
+
+    # De-dupe by block index, keeping the shallowest (top-level) title.
+    by_index: dict[int, dict] = {}
+    for r in sorted(resolved, key=lambda r: (r["index"], r["level"])):
+        by_index.setdefault(r["index"], r)
+    out = sorted(by_index.values(), key=lambda r: r["index"])
+    return out if len(out) >= 2 else None
 
 
 # ---------------------------------------------------------------------------
@@ -284,26 +378,50 @@ class EpubAdapter(DocumentAdapter):
         self._book = epub.read_epub(path, options={"ignore_ncx": False})
         self._path = path
 
+        # Document title (used by segmentation to recognise the title page).
+        _md = self._book.get_metadata("DC", "title")
+        _title = (_md[0][0] if _md and _md[0] else "") or ""
+
         blocks: list[Block] = []
         idx = 0
+        item_first_index: dict[str, int] = {}   # item_id -> first block index
+        anchor_index: dict[tuple, int] = {}      # (item_id, anchor) -> block index
+        spine_starts: set[int] = set()           # F3: first block of each spine doc
+        name_to_id: dict[str, str] = {}          # href file -> item_id (+ basename)
+
         for item in self._book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
             if isinstance(item, epub.EpubNav):
                 continue    # EpubNav.get_type()==ITEM_DOCUMENT; nav is not body content
+            item_id = item.get_id()
+            name = item.get_name() or ""
+            name_to_id.setdefault(name, item_id)
+            name_to_id.setdefault(name.rsplit("/", 1)[-1], item_id)
+
             soup = BeautifulSoup(item.get_content(), "html.parser")
             body = soup.find("body") or soup
-            for el in body.find_all(True, recursive=False):
-                blocks.append(_epub_block(idx, el, item.get_id()))
+            first_for_item: int | None = None
+            for el in _iter_block_elements(body):        # F4: descend wrappers
+                blocks.append(_epub_block(idx, el, item_id))
+                if first_for_item is None:
+                    first_for_item = idx
+                for an in _element_ids(el):              # F1: index every anchor
+                    anchor_index.setdefault((item_id, an), idx)
                 idx += 1
+            if first_for_item is not None:
+                item_first_index[item_id] = first_for_item
+                spine_starts.add(first_for_item)         # F3
 
         self._blocks = blocks
 
         return UnifiedDocument(
             blocks=blocks,
-            meta=DocumentMeta(source_format="epub", path=path),
+            meta=DocumentMeta(source_format="epub", path=path, title=_title),
             page_break_after=set(),
             section_break_at=set(),
             isolated=_compute_isolated(blocks),
-            toc_entries=_extract_toc(self._book),
+            spine_starts=spine_starts,
+            toc_entries=_resolve_toc(self._book, item_first_index,   # F2
+                                     anchor_index, name_to_id),
         )
 
     def make_writer(self) -> OutputWriter:

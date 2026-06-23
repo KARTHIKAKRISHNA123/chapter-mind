@@ -24,6 +24,12 @@ _ROMAN = re.compile(r"^\s*([IVXLCDM]{1,7})\s*[\.\:\)]?\s*$", re.I)
 _CHAPTER_KW = re.compile(r"^\s*(chapter|chap\.?)\s+([0-9]+|[ivxlcdm]+)\b", re.I)
 _PART_KW = re.compile(r"^\s*(part|book|section|volume)\s+([0-9]+|[ivxlcdm]+|one|two|three|four|five|six|seven|eight|nine|ten)\b", re.I)
 _NUMERIC = re.compile(r"^\s*(\d{1,3})([\.\:\)]\s+\S|\s+\S)")  # "3. Title" / "3 Title"
+# Hindi date pattern: '12 सितम्बर 2000', '5 नवम्मर 1953...' — day + month name in Devanagari.
+# Used to exclude dates from the numeric chapter candidate gate in detector.py.
+_HINDI_DATE = re.compile(
+    r"^\s*\d{1,2}\s+(?:जनवरी|फरवरी|मार्च|अप्रैल|मई|जून|जुलाई|अगस्त|"
+    r"सितम्बर|सितंबर|सितम्मर|अक्तूबर|अक्टूबर|नवम्बर|नवंबर|नवम्मर|"
+    r"दिसम्बर|दिसंबर)", re.UNICODE)
 
 
 def s_toc_match(block, ctx):
@@ -167,6 +173,18 @@ def s_isolation(block, ctx):
     return 0.6 if block.index in ctx["isolated"] else 0.0
 
 
+def s_spine_start(block, ctx):
+    """Block opens a new EPUB spine document (one-file-per-chapter layouts).
+    WHY: in EPUB the spine is the author's own packaging boundary -- a new
+    content document usually starts a new division. Language-independent and
+    style-independent, so it rescues books that expose no heading styles.
+    FP risk: front/back-matter files (cover, copyright, license) also open a
+    spine doc -- mitigated by being layout-weight only and by downstream
+    min-distance / over-split / structure validation. FN risk: single-file
+    EPUBs (then anchors / nav carry detection instead)."""
+    return 0.8 if block.index in (ctx.get("spine_starts") or ()) else 0.0
+
+
 def s_division(block, ctx):
     """Text matches a known division label/numbering in EN/FR/DE
     (Chapter/Part/Book/Volume/Letter/Act/Scene/Story/Night/..., or a bare
@@ -205,4 +223,5 @@ SIGNALS = {
     "ROMAN_NUMERAL": s_roman,
     "NUMERIC_CHAPTER": s_numeric_chapter,
     "ISOLATION": s_isolation,
+    "SPINE_START": s_spine_start,
 }

@@ -1,7 +1,33 @@
 {
   "format": "epub",
-  "source": "Project Gutenberg EPUB (pg521) — flat/unstructured navigation",
-  "abstained": true,
-  "chapter_count": 1,
-  "note": "This EPUB has no chapter nav points; abstention is the correct safe output."
+  "source": "Project Gutenberg EPUB (pg521) — multi-file nav + spine",
+  "abstained": false,
+  "chapter_count": 24,
+  "titles": [
+    "Front Matter",
+    "The Life and Adventures of Robinson Crusoe",
+    "Contents",
+    "CHAPTER I. START IN LIFE",
+    "CHAPTER II. SLAVERY AND ESCAPE",
+    "CHAPTER III. WRECKED ON A DESERT ISLAND",
+    "CHAPTER IV. FIRST WEEKS ON THE ISLAND",
+    "CHAPTER V. BUILDS A HOUSE—THE JOURNAL",
+    "CHAPTER VI. ILL AND CONSCIENCE-STRICKEN",
+    "CHAPTER VII. AGRICULTURAL EXPERIENCE",
+    "CHAPTER VIII. SURVEYS HIS POSITION",
+    "CHAPTER IX. A BOAT",
+    "CHAPTER X. TAMES GOATS",
+    "CHAPTER XI. FINDS PRINT OF MAN’S FOOT ON THE SAND",
+    "CHAPTER XII. A CAVE RETREAT",
+    "CHAPTER XIII. WRECK OF A SPANISH SHIP",
+    "CHAPTER XIV. A DREAM REALISED",
+    "CHAPTER XV. FRIDAY’S EDUCATION",
+    "CHAPTER XVI. RESCUE OF PRISONERS FROM CANNIBALS",
+    "CHAPTER XVII. VISIT OF MUTINEERS",
+    "CHAPTER XVIII. THE SHIP RECOVERED",
+    "CHAPTER XIX. RETURN TO ENGLAND",
+    "CHAPTER XX. FIGHT BETWEEN FRIDAY AND A BEAR",
+    "THE FULL PROJECT GUTENBERG™ LICENSE"
+  ],
+  "note": "Multi-file Project Gutenberg EPUB: nav hrefs resolve to block indices (F1/F2), spine starts seed candidates (F3), and chapter-wrapper divs are descended (F4). Authoritative TOC drives the split."
 }

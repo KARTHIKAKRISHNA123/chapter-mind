@@ -27,7 +27,7 @@ from .scoring import score_block
 from . import toc as toc_mod
 from . import decision_engine as de
 from . import vocabulary as V
-from .signals import _ROMAN, _CHAPTER_KW, _PART_KW, _NUMERIC
+from .signals import _ROMAN, _CHAPTER_KW, _PART_KW, _NUMERIC, _HINDI_DATE
 
 @dataclass
 class Chapter:
@@ -40,6 +40,7 @@ class Chapter:
     depth: int = None          # RTCFR: adaptive hierarchy depth
     div_type: str = None       # RTCFR: volume/book/part/act/chapter/section/scene
     number: object = None      # RTCFR: parsed division number (progression checks)
+    role: str = "body"         # PS3: front_matter | body | back_matter
     explanation: dict = None   # RTCFR: per-boundary explainability record
 
 
@@ -49,6 +50,20 @@ class ChapterPlan:
     abstained: bool = False
     reason: str = ""
     diagnostics: dict = field(default_factory=dict)
+
+    # PS3 segmentation views — lossless: `chapters` still holds everything; these
+    # are filtered views so a caller can take content-only or matter-only slices.
+    @property
+    def body_chapters(self):
+        return [c for c in self.chapters if c.role == "body"]
+
+    @property
+    def front_matter(self):
+        return [c for c in self.chapters if c.role == "front_matter"]
+
+    @property
+    def back_matter(self):
+        return [c for c in self.chapters if c.role == "back_matter"]
 
 
 class _MergedView:
@@ -109,7 +124,7 @@ def _is_raw_candidate(b, band):
         return True
     if _CHAPTER_KW.match(b.text) or _PART_KW.match(b.text) or _ROMAN.match(b.text):
         return True
-    if b.word_count <= 12 and _NUMERIC.match(b.text or ""):   # "N. Title" — any script
+    if b.word_count <= 15 and _NUMERIC.match(b.text or "") and not _HINDI_DATE.match(b.text or ""):  # "N. Title" — any script
         return True
     if b.word_count <= 12:
         m = V.match_division(b.text)
@@ -168,15 +183,110 @@ def _merge_candidates(blocks, band, page_starts=frozenset(), isolated=frozenset(
     return groups
 
 
+_TIGHT_CLUSTER_MAX_GAP = 5   # indices apart → still "one list", not two chapters
+_TAIL_DOMINANT_RATIO    = 3.0  # tail > ratio × covered → front-matter list → skip
+
+
+def _detect_list_chapters(doc: UnifiedDocument):
+    """Return chapter-start Blocks demarcated by Word list numbering (ilvl=0),
+    or None if the pattern doesn't look like real chapter boundaries.
+
+    Algorithm
+    ---------
+    1. Collect all blocks whose w:numPr has ilvl = 0.
+    2. Group consecutive ilvl-0 blocks into clusters where each pair's gap
+       (in body-child indices) is ≤ _TIGHT_CLUSTER_MAX_GAP.  Singleton
+       clusters → chapter boundaries; multi-member clusters → tight list
+       (back-matter, footnotes, etc.) → discarded.
+    3. Require ≥ 2 keepers.
+    4. Tail-dominance guard: if the untagged tail after the last boundary
+       exceeds _TAIL_DOMINANT_RATIO × the span they cover, this is a
+       front-matter list, not chapter structure → return None.
+    """
+    ilvl0 = [b for b in doc.blocks if b.num is not None and b.num[1] == 0]
+    if len(ilvl0) < 2:
+        return None
+
+    # Group into clusters (consecutive gap ≤ threshold → same cluster)
+    clusters: list[list] = []
+    cur = [ilvl0[0]]
+    for i in range(1, len(ilvl0)):
+        if ilvl0[i].index - ilvl0[i - 1].index <= _TIGHT_CLUSTER_MAX_GAP:
+            cur.append(ilvl0[i])
+        else:
+            clusters.append(cur)
+            cur = [ilvl0[i]]
+    clusters.append(cur)
+
+    keepers = [c[0] for c in clusters if len(c) == 1]
+    if len(keepers) < 2:
+        return None
+
+    # Tail-dominance guard
+    covered = keepers[-1].index - keepers[0].index
+    tail    = len(doc.blocks) - keepers[-1].index - 1
+    if covered > 0 and tail > _TAIL_DOMINANT_RATIO * covered:
+        return None
+
+    return keepers
+
+
+# ---- PS3: segmentation roles (front_matter / body / back_matter) -----------
+# Matter *types* come from the multilingual vocabulary (V.MATTER); they are
+# split into front vs back by canonical type, with position as the tie-breaker.
+# A few language-agnostic markers catch the cases the vocabulary cannot:
+#   * the title page  -> matches the document's own title (any language)
+#   * common back matter -> license / colophon / index markers
+_FRONT_MATTER_TYPES = {"contents", "preface", "foreword", "introduction", "prologue"}
+_BACK_MATTER_TYPES  = {"appendix", "afterword", "conclusion", "epilogue"}
+_BACK_MATTER_MARKERS = (
+    "gutenberg", "license", "licence", "copyright", "colophon",
+    "transcriber", "errata", "end of the project",
+)
+
+
+def _norm_role_text(s: str) -> str:
+    return " ".join((s or "").lower().split())
+
+
+def _apply_roles(chapters, meta_title: str = "") -> None:
+    """Tag each chapter in place with role ∈ {front_matter, body, back_matter}.
+
+    LOSSLESS: nothing is dropped. The role is metadata; callers wanting a
+    content-only split use ChapterPlan.body_chapters. Deterministic and
+    language-agnostic (matter *types* come from the multilingual vocabulary;
+    the title page is found via the document's own title)."""
+    booktitle = _norm_role_text(meta_title)
+    seen_body = False
+    for c in chapters:
+        dt = (c.div_type or "").lower()
+        title_n = _norm_role_text(c.title)
+        if c.level == "front":                         # synthetic Front Matter
+            c.role = "front_matter"
+        elif any(mk in title_n for mk in _BACK_MATTER_MARKERS):
+            c.role = "back_matter"
+        elif dt in _BACK_MATTER_TYPES:
+            c.role = "back_matter"
+        elif dt in _FRONT_MATTER_TYPES:
+            c.role = "front_matter"
+        elif booktitle and title_n == booktitle and not seen_body:
+            c.role = "front_matter"                    # title page (pre-body)
+        else:
+            c.role = "body"
+            seen_body = True
+
+
 def detect(doc: UnifiedDocument, level_filter="auto") -> ChapterPlan:
     blocks = doc.blocks                       # already built by the adapter
     body_size, band = compute_baselines(blocks)
     page_break_after = doc.page_break_after   # adapter-computed
     section_at       = doc.section_break_at
     isolated         = doc.isolated
+    spine_starts     = doc.spine_starts       # EPUB spine-document boundaries
 
     merged = _merge_candidates(blocks, band,
-                               page_break_after | section_at, isolated)
+                               page_break_after | section_at | spine_starts,
+                               isolated)
 
     # ---- L1: TOC intelligence -------------------------------------------
     # Prefer adapter-extracted, INDEX-BASED TOC (DOCX _Toc anchors): language-
@@ -205,14 +315,40 @@ def detect(doc: UnifiedDocument, level_filter="auto") -> ChapterPlan:
         n_entries = len(toc_mod.extract_entries(blocks, region)) if region else 0
         toc_authoritative = bool(toc_matched) and len(toc_matched) >= max(5, 0.5 * n_entries)
 
+    # ---- L1.5: List-numbering path (Word numPr / ilvl=0) -------------------
+    # When the author demarcated chapters with Word's built-in list-numbering
+    # (w:numPr, ilvl=0) rather than heading styles, no signal fires reliably.
+    # Detect this pattern early and bypass the full scoring pipeline.
+    # Only fires when TOC did not already give us authoritative boundaries.
+    if not toc_authoritative:
+        list_cands = _detect_list_chapters(doc)
+        if list_cands is not None:
+            lchapters: list[Chapter] = []
+            if list_cands[0].index > 0:
+                lchapters.append(Chapter(
+                    "Front Matter", 0, list_cands[0].index,
+                    level="front", confidence=1.0))
+            for i, b in enumerate(list_cands):
+                end = (list_cands[i + 1].index if i + 1 < len(list_cands)
+                       else len(blocks))
+                lchapters.append(Chapter(
+                    b.text or f"Section {i + 1}",
+                    b.index, end, "chapter", 0.80,
+                    fired={"LIST_NUMBERED": 1.0}))
+            _apply_roles(lchapters, doc.meta.title)
+            return ChapterPlan(
+                chapters=lchapters, abstained=False,
+                diagnostics={"method": "list_numbering"})
+
     # Context dict consumed by every signal function in signals.py.
-    # All five keys must be present; signals guard against None/empty themselves.
+    # All keys must be present; signals guard against None/empty themselves.
     ctx = {
         "toc_indices":      toc_indices,
         "heading_band":     band,
         "page_break_after": page_break_after,
         "section_break_at": section_at,
         "isolated":         isolated,
+        "spine_starts":     spine_starts,
     }
 
     # ---- build candidates for the Decision Engine ------------------------
@@ -287,5 +423,12 @@ def detect(doc: UnifiedDocument, level_filter="auto") -> ChapterPlan:
             b.title, b.index, end, (b.div_type or b.level), b.confidence, b.fired,
             depth=b.depth, div_type=b.div_type, number=b.number,
             explanation=expl.get(b.index)))
+
+    _apply_roles(chapters, doc.meta.title)
+    diagnostics["roles"] = {
+        "front_matter": sum(c.role == "front_matter" for c in chapters),
+        "body":         sum(c.role == "body" for c in chapters),
+        "back_matter":  sum(c.role == "back_matter" for c in chapters),
+    }
 
     return ChapterPlan(chapters=chapters, abstained=False, diagnostics=diagnostics)

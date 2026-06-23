@@ -53,6 +53,7 @@ EVIDENCE = {
     "ROMAN_NUMERAL":        0.50,   # isolated roman numeral
     "PAGE_BREAK_BEFORE":    0.48,   # new-page start
     "SECTION_BREAK":        0.48,   # new-section / recto start
+    "SPINE_START":          0.48,   # new EPUB spine document (one-file-per-chapter)
     "ISOLATION":            0.40,   # surrounded by blank, followed by body
     "CENTERED":             0.32,   # supporting layout cue
     "ALL_CAPS":             0.30,   # supporting, overloaded
@@ -86,6 +87,7 @@ FAMILY = {
     # Layout / structural positioning
     "PAGE_BREAK_BEFORE":    "layout",
     "SECTION_BREAK":        "layout",
+    "SPINE_START":          "layout",
     "ISOLATION":            "layout",
 }
 

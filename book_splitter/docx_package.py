@@ -33,10 +33,23 @@ without modification -- so their formatting is identical to the source.
 
 No reconstruction. We only DELETE sibling blocks. That is what makes
 preservation effectively 100%.
+
+Phase 8 — lazy streaming
+------------------------
+``__init__`` parses word/document.xml ONCE to build ``_skeleton`` (the
+empty-body template used by ``clone_with_blocks``), then immediately frees
+the full lxml tree.  The adapter's streaming loader iterates body children
+via ``iter_block_children()`` (an iterparse generator) and clears each
+element after feature extraction, so peak in-RAM lxml data is bounded by
+one body child at a time during detection.
+
+``block_children()`` still works as a compatibility shim (full re-parse)
+for callers that need a random-access list (e.g. the legacy splitter.py).
 """
 
 from __future__ import annotations
 import copy
+import io
 import zipfile
 from lxml import etree
 
@@ -51,7 +64,20 @@ _BLOCK_TAGS = {W + "p", W + "tbl", W + "sdt"}
 
 
 class DocxPackage:
-    """In-memory representation of a .docx package with loss-free cloning."""
+    """In-memory representation of a .docx package with loss-free cloning.
+
+    Memory contract (Phase 8)
+    -------------------------
+    After ``__init__`` returns:
+
+    * ``_raw``      – all ZIP member bytes (needed for clone_with_blocks).
+    * ``_skeleton`` – tiny empty-body tree (needed for clone_with_blocks).
+    * ``_names``    – ordered ZIP member names.
+
+    The full lxml element tree of ``word/document.xml`` is parsed briefly
+    to build ``_skeleton``, then freed.  The adapter uses
+    ``iter_block_children()`` to stream body children one at a time.
+    """
 
     def __init__(self, path: str):
         self.path = path
@@ -63,16 +89,19 @@ class DocxPackage:
                 self._names.append(info.filename)
                 self._raw[info.filename] = z.read(info.filename)
 
-        # Parse only the main document part; everything else stays as raw bytes.
+        # Parse document.xml once — only to build _skeleton.
+        # The full tree is freed immediately afterwards; the adapter
+        # uses iter_block_children() for streaming feature extraction.
         parser = etree.XMLParser(remove_blank_text=False, huge_tree=True)
-        self._doc_tree = etree.fromstring(self._raw["word/document.xml"], parser)
-        self._body = self._doc_tree.find(W + "body")
-        if self._body is None:
+        _tmp_tree = etree.fromstring(self._raw["word/document.xml"], parser)
+        _tmp_body = _tmp_tree.find(W + "body")
+        if _tmp_body is None:
             raise ValueError("Malformed DOCX: <w:body> not found in document.xml")
 
-        # Empty-body skeleton built ONCE: clone_with_blocks copies this (tiny)
-        # per chapter instead of the whole document. Output stays byte-identical.
-        self._skeleton = copy.deepcopy(self._doc_tree)
+        # Empty-body skeleton: doc root + body with only the trailing sectPr.
+        # clone_with_blocks() deep-copies this tiny tree per chapter so that
+        # all namespace declarations and document-level attributes are preserved.
+        self._skeleton = copy.deepcopy(_tmp_tree)
         skel_body = self._skeleton.find(W + "body")
         kids = list(skel_body)
         keep_sect = kids[-1] if (kids and kids[-1].tag == W + "sectPr") else None
@@ -80,36 +109,69 @@ class DocxPackage:
             if child is not keep_sect:
                 skel_body.remove(child)
 
-    # ---- read-only structural access -------------------------------------
+        # Free the full parse — only _skeleton and _raw are retained.
+        del _tmp_tree, _tmp_body
 
-    @property
-    def body(self):
-        return self._body
+    # ---- streaming access (preferred) ------------------------------------
 
-    def body_children(self) -> list:
-        """All direct children of <w:body> in document order (paragraphs,
-        tables, sdt blocks, and the trailing sectPr)."""
-        return list(self._body)
+    def iter_block_children(self):
+        """Generator: yield each direct ``<w:body>`` child (except final
+        ``<w:sectPr>``) in document order, parsed from the cached raw bytes.
+
+        Depth-tracking iterparse ensures only ONE body-level element is fully
+        built in RAM at a time.  The caller MUST call ``el.clear()`` on each
+        yielded element after extracting all needed information; not doing so
+        negates the memory benefit.
+
+        Typical usage::
+
+            for el in pkg.iter_block_children():
+                block = extract_features(el)
+                el.clear()          # ← required: free internal nodes
+        """
+        depth = 0
+        body_depth: int | None = None
+
+        for event, el in etree.iterparse(
+            io.BytesIO(self._raw["word/document.xml"]),
+            events=("start", "end"),
+        ):
+            if event == "start":
+                depth += 1
+                if el.tag == W + "body" and body_depth is None:
+                    body_depth = depth
+            else:  # "end"
+                if body_depth is not None and depth == body_depth + 1:
+                    if el.tag != W + "sectPr":
+                        yield el
+                    # caller clears the element; we only track depth
+                depth -= 1
+
+    # ---- compatibility shim (random-access) ------------------------------
 
     def block_children(self) -> list:
-        """Body children EXCLUDING the final body-level <w:sectPr>.
+        """All direct body children EXCLUDING the final ``<w:sectPr>``.
 
-        These are the units a chapter is made of. Tables and content controls
-        travel with the surrounding paragraphs automatically because they are
-        siblings in this same ordered list."""
-        kids = self.body_children()
+        Re-parses ``word/document.xml`` from the cached raw bytes on every
+        call; prefer ``iter_block_children()`` for large documents.
+
+        Retained for backward compatibility with callers that need a
+        random-access list (e.g. legacy ``splitter.py``).
+        """
+        parser = etree.XMLParser(remove_blank_text=False, huge_tree=True)
+        doc = etree.fromstring(self._raw["word/document.xml"], parser)
+        body = doc.find(W + "body")
+        kids = list(body) if body is not None else []
         if kids and kids[-1].tag == W + "sectPr":
             return kids[:-1]
         return kids
 
-    def final_sectpr(self):
-        """The body-level <w:sectPr>: page size, margins, header/footer refs.
-        A deep copy of this is appended to EVERY chapter so each output file has
-        identical page setup and header/footer wiring."""
-        kids = self.body_children()
-        if kids and kids[-1].tag == W + "sectPr":
-            return kids[-1]
-        return None
+    def body_children(self) -> list:
+        """All direct body children INCLUDING the trailing ``<w:sectPr>``."""
+        parser = etree.XMLParser(remove_blank_text=False, huge_tree=True)
+        doc = etree.fromstring(self._raw["word/document.xml"], parser)
+        body = doc.find(W + "body")
+        return list(body) if body is not None else []
 
     # ---- the loss-free clone ---------------------------------------------
 
@@ -136,7 +198,6 @@ class DocxPackage:
         )
 
         # 3. Re-zip: every member kept verbatim, only document.xml substituted.
-        import io
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
             for name in self._names:

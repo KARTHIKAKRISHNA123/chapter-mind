@@ -396,9 +396,14 @@ def match_division(text: str):
                 if canon:
                     return {"type": canon, "number": n0[1], "system": n0[0],
                             "role": "ordinal_label", "surface": kw}
-        # No Indic keyword matched; fall through to roman-numeral / bare-number
-        # check below (Indic-script files often use Arabic or Devanagari digits
-        # as prefix numbers without an explicit keyword).
+        # Leading number, no Indic keyword after it → bare numbered division
+        # (e.g. '1. जाती खतम...' in Bhojpuri/Hindi/Assamese).
+        # Returning bare here lets _prune_numbering_noise deduplicate nested-list
+        # false-positives that carry the same number as a real chapter boundary.
+        if n0:
+            return {"type": None, "number": n0[1], "system": n0[0],
+                    "role": "bare", "surface": tokens[0]}
+        # No number, no Indic keyword → fall through to roman-numeral check.
 
     first = _norm_token(tokens[0])
     lead_punct = bool(re.search(r"[.)\]:]$", tokens[0]))   # "A." / "1)" / "I:"
